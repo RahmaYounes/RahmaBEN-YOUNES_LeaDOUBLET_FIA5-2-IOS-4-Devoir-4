@@ -1,0 +1,1023 @@
+---
+title: "FIE4-2-IMTNS-2-Devoir-4"
+author: "Adrien Wartelle"
+date: "2026-01-11"
+output: html_notebook # html_document
+---
+
+# Etude de cas sur l’analyse et la mesure de performance des Flux de Patients
+
+## Introduction
+
+Ce travail porte sur l'analyse des flux de patients sur un plateau mutualisé de consultations externes d'un hôpital. 
+L'objectif est de réaliser un diagnostic objectif de la performance organisationnelle du service d'urologie en s'appuyant sur les méthodes et outils d'analyse de flux vus précédemment ainsi que sur le langage R à travers l’environnement de RStudio. 
+La figure ci-dessous illustre les principaux flux ainsi que le Plan du plateau de consultations (voir fichiers PlanConsultations.pdf et ZoomURO.pdf consultables à partir http://bit.ly/PlansCHUTlse)
+
+<!--<img src="illustrations/PlanUro.png" alt="Plan du plateau de consultations" width="600"/>-->
+![*Plan du plateau de consultations*](illustrations/PlanUro.png "Plan du plateau de consultations")
+Afin de collecter des données sur les parcours suivis, les patients qui se sont présentés le 12/11/2015 ont été équipés d’une étiquette électronique (type RFID) qui a permis de tracer leurs parcours dans le plateau de consultation. 
+Les données collectées ont été fusionnées avec les données des outils de gestion des dossiers administratifs et médicaux utilisés par les personnels. 
+L'ensemble est disponible sous la forme d’un fichier log, illustré par le tableau suivant (voir annexe LogPatientUROseul_12112015.xlsx consultable à partir  http://bit.ly/logPatients). 
+
+<!--<img src="illustrations/TableauLogPatients.png" alt="Vue du tableau de données de log patient" width="600"/>-->
+![*Vue du tableau de données de log patient*](illustrations/TableauLogPatients.png "Vue du tableau de données de log patient")
+
+
+Les différentes de ce tableau de données sont :
+
+  - _ID_ (Col A) : Identifiant du patient
+  
+  - _Timestamp start_ (Col B) : horodatage entrée de zone ou salle 
+  
+  - _Timestamp end_ (Col C) : horodatage sortie de zone ou salle
+  
+  - _Activity\_MACRO_ (Col D) : Type d'activité
+  
+  - _Activity\_DETAILS_ (Col E) : Activité suivie et indice salle (i)
+  
+  - _Ress.Humaines_ (Col F) : Ressources humaines administratives ou soignantes intervenant dans l'activité
+  
+  - _distance parcourues_ (Col G) : Distance parcourue cumulée
+  
+  - _début/fin opX_ (Col H à O) : horodatage début/fin de chaque opération de prise en charge par une ressource administrative ou soignante (maxi 4 opérations par activité).
+
+## **Devoir 4 - Travail demandé** : Modélisation finale
+
+Ce travail, qui peut-être effectué en binôme, est à rendre pour le **14/05/2026** au format Rmd ou R (+pdf si besoin) avec pour titre "NOM_Prenom_FI54-2-IOS-4-Devoir-4.*" et fera l'objet d'une soutenance à cette même date.
+
+Toujours dans la continuité des précédant devoirs, l'objectif de ce dernier devoir est de proposer une modélisation simulable finale de notre service d'urologie en 3 étapes :
+
+1) Modélisation des parcours patient par _Process Mining_
+
+2) Simulation du service d'accueil sous Anylogic
+
+3) Simulation du service d'urologie
+
+```{r include=FALSE}
+library(tidyverse)
+library(data.table)
+library(readxl)
+library(stringr)    # Charge explicitement stringr pour str_detect()
+
+
+load("local_data/trace_example_1.RData")
+load("local_data/trace_example_final.RData")
+devoir3_data_accueil = read_csv2("local_data/devoir3_data_accueil.csv")
+```
+
+### Question 1) Modélisation des parcours patient par _Process Mining_ (/2.5)
+
+Pour cette premier question, il vous est demandé de modéliser les parcours patient selon un modèle de chaîne de Markov.
+On cherche à modéliser uniquement les étapes impliquant un agent de soins, c'est-à-dire qui utilise des ressources du service (contrairement aux étapes de déplacement et d'attente).
+
+
+Par exemple pour le patient d'ID 10, on a 9 étapes :
+
+```{r}
+trace_example_final %>%
+  filter(!is.na(CURRENT_OPERATION_NUMBER)) %>%
+  filter(ID == 10)
+```
+
+Pour éviter toute difficulté liée à la complexité des opérations, on va regrouper les différents temps selon l'activité macro et le type d'acteur.
+Par exemple, pour le patient d'ID 10, on a les temps "strictes" suivant :
+
+```{r}
+trace_example_final_b <- trace_example_final %>%
+  filter(!is.na(CURRENT_OPERATION_NUMBER)) %>%
+  filter(ID == 10) %>%
+  mutate(ACTIVITY_MACRO = ifelse(str_detect(CURRENT_LOCATION,"Uro_Box"),
+                                 "Consultation",NA),
+         ACTIVITY_MACRO = ifelse(str_detect(CURRENT_LOCATION,"Uro_Examen"),
+                                 "Examen",ACTIVITY_MACRO),
+         ACTIVITY_MACRO = ifelse(str_detect(CURRENT_LOCATION,"Accueil"),
+                                 "Accueil",ACTIVITY_MACRO),
+         ACTIVITY_MACRO = ifelse(str_detect(CURRENT_LOCATION,"Sortie"),
+                                 "Sortie",ACTIVITY_MACRO), # à continuer dans le cas général et à faire aussi par type d'agent de soins
+         )
+  
+trace_example_final_b %>%
+  group_by(ACTIVITY_MACRO,WITH_1) %>% # Attention, il faudra considérer le type d'acteur de manière agrégée
+  summarize(time_in_minutes = sum(as.double(DATETIME_END) - as.double(DATETIME_BEGIN)) / 60) # Attention, il faudra calculer l'Effective Process Time
+```
+
+Attention ces temps ne sont pas tout à fait correcte pour notre type de modélisation, il faut prendre en compte des _Effective Time Process_ en prenant en compte aussi les temps morts des acteurs (cf Devoir 3)
+
+Pour vous aidez à parvenir à cette modélisation, une méthodologie vous est proposé :
+
+-   Commencez par une modélisation macro des activités générales simplement en regardant la probabilité d'occurence de celles-ci (en fonction aussi de si le patient est prioritaire ou non)
+    
+    -   Dans le cas de notre patient ID 10, on a en 4 : Accueil, Consultation (Même si c'est coupé en 2), Examen, Sortie
+    
+    -   Gardez l'ordre le plus fréquemment des activités observées (Accueil, Consultation, Examen ..., Sortie)
+    
+    ```{r}
+library(tidyverse)
+library(stringr)
+
+
+# 2. Filtrer les étapes avec intervention humaine et classer les activités
+trace_macro <- trace_example_final %>%
+  filter(!is.na(CURRENT_OPERATION_NUMBER)) %>%  # Garder seulement les étapes avec intervention
+  mutate(
+    ACTIVITY_MACRO = case_when(
+      str_detect(CURRENT_LOCATION, "Accueil") ~ "Accueil",
+      str_detect(CURRENT_LOCATION, "Uro_Box") ~ "Consultation",
+      str_detect(CURRENT_LOCATION, "Uro_Examen") ~ "Examen",
+      str_detect(CURRENT_LOCATION, "Sortie") ~ "Sortie",
+      TRUE ~ NA_character_  # Ignorer les autres étapes
+    ),
+    # Ajouter une colonne pour identifier les patients prioritaires (à adapter)
+    IS_PRIORITY = ifelse(ID %in% c(10, 20, 30), TRUE, FALSE)  # Exemple : IDs 10, 20, 30 sont prioritaires
+  ) %>%
+  filter(!is.na(ACTIVITY_MACRO))  # Supprimer les lignes sans activité macro
+
+# 3. Calculer la fréquence d'apparition de chaque activité
+activity_frequency <- trace_macro %>%
+  group_by(ACTIVITY_MACRO, IS_PRIORITY) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  mutate(frequency = count / sum(count))  # Fréquence relative
+
+print("Fréquence des activités macro :")
+print(activity_frequency)
+
+# 4. Déterminer l'ordre le plus fréquent des activités
+# Pour chaque patient, extraire la séquence d'activités
+patient_sequences <- trace_macro %>%
+  arrange(ID, DATETIME_BEGIN) %>%  # Trier par patient et horodatage
+  group_by(ID, IS_PRIORITY) %>%
+  summarise(
+    activity_sequence = paste(ACTIVITY_MACRO, collapse = " -> "),
+    .groups = "drop"
+  )
+
+# Compter les séquences les plus fréquentes
+sequence_frequency <- patient_sequences %>%
+  count(activity_sequence, IS_PRIORITY) %>%
+  arrange(desc(n))
+
+print("Séquences d'activités les plus fréquentes :")
+print(sequence_frequency)
+    
+    ```
+    
+-   Dans chacune des activités macro, modélisez la probabilité de faire appel à chaque type d'acteur et dans le cas où un doit intervenir modéliser _l'Effective Time Process_ nécessaire avec une loi gamma (en fonction aussi de si le patient est prioritaire ou non)
+
+    -   Dans le cas de notre patient ID 10, on fait appel à 6 combinaisons activité / agents différents
+```{r}
+library(tidyverse)
+library(stringr)
+library(MASS)
+
+# =============================================
+# 1. NETTOYAGE DES DONNÉES
+# =============================================
+trace_clean <- trace_example_final %>%
+  # Filtrer les étapes avec intervention et sans NA
+  filter(!is.na(CURRENT_OPERATION_NUMBER)) %>%
+  mutate(
+    # Catégoriser les activités macro
+    ACTIVITY_MACRO = case_when(
+      str_detect(CURRENT_LOCATION, "Accueil") ~ "Accueil",
+      str_detect(CURRENT_LOCATION, "Uro_Box") ~ "Consultation",
+      str_detect(CURRENT_LOCATION, "Uro_Examen") ~ "Examen",
+      str_detect(CURRENT_LOCATION, "Sortie") ~ "Sortie",
+      TRUE ~ NA_character_
+    ),
+    # Identifier les patients prioritaires
+    IS_PRIORITY = str_detect(CURRENT_LOCATION, "Prio"),
+    # Extraire uniquement les noms d'acteurs (ignorer les IDs de patients)
+    ACTOR = case_when(
+      str_detect(WITH_1, "ACCUEIL|URO|SORTIE") ~ WITH_1,
+      TRUE ~ NA_character_
+    ),
+    # Calculer la durée en secondes
+    DURATION = as.numeric(difftime(DATETIME_END, DATETIME_BEGIN, units = "secs"))
+  ) %>%
+  # Garder seulement les lignes valides
+  filter(!is.na(ACTIVITY_MACRO), !is.na(ACTOR), DURATION > 0)
+
+# =============================================
+# 2. PROBABILITÉS D'INTERVENTION
+# =============================================
+actor_probability <- trace_clean %>%
+  group_by(ACTIVITY_MACRO, ACTOR, IS_PRIORITY) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(ACTIVITY_MACRO, IS_PRIORITY) %>%
+  mutate(prob = count / sum(count))  # Probabilité conditionnelle
+
+# Afficher les probabilités
+print("=== Probabilités d'intervention des acteurs ===")
+print(actor_probability)
+
+# =============================================
+# 3. AJUSTEMENT DES LOIS GAMMA (TEMPS DE SERVICE)
+# =============================================
+# Fonction pour ajuster une loi Gamma avec MASS
+fit_gamma_mass <- function(durations) {
+  tryCatch(
+    {
+      fit <- fitdistr(durations, "Gamma", method = "ML")
+      return(list(shape = fit$estimate["shape"], rate = fit$estimate["rate"]))
+    },
+    error = function(e) {
+      return(list(shape = NA, rate = NA))  # Retourne NA si l'ajustement échoue
+    }
+  )
+}
+
+# Appliquer l'ajustement par groupe (activité + acteur + priorité)
+cat("\n=== Paramètres des lois Gamma (temps de service) ===\n")
+
+gamma_params <- trace_clean %>%
+  group_by(ACTIVITY_MACRO, ACTOR, IS_PRIORITY) %>%
+  filter(n() >= 10) %>%
+  summarise(
+    params = list(fit_gamma_mass(DURATION)),
+    .groups = "drop"
+  ) %>%
+  unnest_wider(params) %>%
+  mutate(scale = 1 / rate)
+
+print(gamma_params)
+
+# =============================================
+# 4. EXPORT DES RÉSULTATS POUR ANYLOGIC
+# =============================================
+# Créer un dossier pour les exports (si inexistant)
+if (!dir.exists("exports")) dir.create("exports")
+
+# Exporter les probabilités
+write_csv(actor_probability, "exports/probabilites_acteurs.csv")
+
+# Exporter les paramètres Gamma
+write_csv(gamma_params, "exports/parametres_gamma.csv")
+
+# =============================================
+# 5. VISUALISATION (OPTIONNEL)
+# =============================================
+# Probabilités d'intervention
+ggplot(actor_probability, aes(x = ACTOR, y = prob, fill = IS_PRIORITY)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ACTIVITY_MACRO, scales = "free_x") +
+  labs(title = "Probabilité d'intervention par acteur et priorité",
+       x = "Acteur", y = "Probabilité") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Temps de service (exemple pour un acteur)
+if (nrow(gamma_params) > 0) {
+  example_actor <- gamma_params %>% slice(1)  # Prendre le premier acteur
+  actor_data <- trace_clean %>%
+    filter(ACTOR == example_actor$ACTOR,
+           ACTIVITY_MACRO == example_actor$ACTIVITY_MACRO,
+           IS_PRIORITY == example_actor$IS_PRIORITY)
+
+  ggplot(actor_data, aes(x = DURATION)) +
+    geom_histogram(aes(y = ..density..), bins = 30, alpha = 0.7) +
+    stat_function(
+      fun = dgamma,
+      args = list(shape = example_actor$shape, scale = example_actor$scale),
+      color = "red", size = 1
+    ) +
+    labs(title = paste("Temps de service -", example_actor$ACTOR),
+         x = "Durée (secondes)", y = "Densité") +
+    theme_minimal()
+}
+
+```
+
+-   Comparer ce modèle simplifié construit avec la réalité observée et aussi avec un modèle plus détaillé qui n'agrégerait pas les différentes étapes et temps d'acteurs
+    ```{r}
+library(tidyverse)
+library(lubridate)
+library(MASS)
+library(gridExtra)
+select <- dplyr::select
+
+load("local_data/trace_example_final.RData")
+df <- trace_example_final
+
+patients <- df %>% filter(TYPE == "PATIENT")
+
+prio_ids <- unique(patients$ID[patients$CURRENT_LOCATION == "Accueil_Prio_1"])
+patients <- patients %>%
+  mutate(PRIO = ifelse(ID %in% prio_ids, "Prioritaire", "Standard"))
+
+patients <- patients %>%
+  mutate(ACTIVITY_MACRO = case_when(
+    str_detect(CURRENT_LOCATION, "Uro_Box")            ~ "Consultation",
+    str_detect(CURRENT_LOCATION, "Uro_Bureau_Annonce") ~ "Consultation",
+    str_detect(CURRENT_LOCATION, "Uro_Bureau_IDE")     ~ "Consultation",
+    str_detect(CURRENT_LOCATION, "Uro_Examen")         ~ "Examen",
+    str_detect(CURRENT_LOCATION, "Uro_Debimetrie")     ~ "Examen",
+    str_detect(CURRENT_LOCATION, "Accueil")            ~ "Accueil",
+    str_detect(CURRENT_LOCATION, "Sortie")             ~ "Sortie",
+    TRUE ~ NA_character_
+  ))
+
+patients <- patients %>%
+  mutate(ACTOR_TYPE = case_when(
+    str_detect(WITH_1, "ACCUEIL")         ~ "Agent_Accueil",
+    str_detect(WITH_1, "SORTIE")          ~ "Agent_Sortie",
+    str_detect(WITH_1, "URO.IDE_Annonce") ~ "IDE_Annonce",
+    str_detect(WITH_1, "URO.IDE")         ~ "IDE",
+    str_detect(WITH_1, "URO.AS")          ~ "AS",
+    str_detect(WITH_1, "URO.MED")         ~ "MED",
+    TRUE ~ NA_character_
+  ))
+
+ops <- patients %>%
+  filter(!is.na(CURRENT_OPERATION_NUMBER)) %>%
+  mutate(
+    DATETIME_BEGIN = as.POSIXct(DATETIME_BEGIN),
+    DATETIME_END   = as.POSIXct(DATETIME_END)
+  ) %>%
+  arrange(WITH_1, DATETIME_BEGIN) %>%
+  group_by(WITH_1) %>%
+  mutate(
+    DATETIME_END_prev = lag(DATETIME_END),
+    tdq = if_else(is.na(DATETIME_END_prev),
+                  DATETIME_BEGIN,
+                  pmax(DATETIME_BEGIN, DATETIME_END_prev)),
+    EPT_secs = as.numeric(difftime(DATETIME_END, tdq, units = "secs")),
+    EPT_min  = EPT_secs / 60
+  ) %>%
+  ungroup()
+
+ops %>%
+  filter(ID == 10) %>%
+  dplyr::select(ACTIVITY_MACRO, WITH_1, ACTOR_TYPE, DATETIME_BEGIN, DATETIME_END, EPT_min)
+
+    ```
+```{r}
+ etats <- c("Accueil", "Consultation", "Examen", "Sortie")
+
+sequences <- patients %>%
+  filter(!is.na(ACTIVITY_MACRO), ACTIVITY_MACRO %in% etats) %>%
+  arrange(ID, DATETIME_BEGIN) %>%
+  group_by(ID, PRIO) %>%
+  mutate(MACRO_prev = lag(ACTIVITY_MACRO)) %>%
+  filter(is.na(MACRO_prev) | ACTIVITY_MACRO != MACRO_prev) %>%
+  summarise(sequence = list(ACTIVITY_MACRO), .groups = "drop")
+
+seq_freq <- sequences %>%
+  mutate(seq_str = sapply(sequence, paste, collapse = " -> ")) %>%
+  count(seq_str, sort = TRUE) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+print(seq_freq)
+
+trans_count <- matrix(0, 4, 4, dimnames = list(from = etats, to = etats))
+
+for (seq in sequences$sequence) {
+  if (length(seq) >= 2) {
+    for (i in seq_len(length(seq) - 1)) {
+      f <- seq[i]; t <- seq[i + 1]
+      if (f %in% etats && t %in% etats)
+        trans_count[f, t] <- trans_count[f, t] + 1
+    }
+  }
+}
+
+trans_prob <- trans_count / rowSums(trans_count)
+trans_prob[is.nan(trans_prob)] <- 0
+
+cat("=== Matrice de transition ===\n")
+print(round(trans_prob, 3))
+
+```
+```{r}
+
+as.data.frame(trans_prob) %>%
+  rownames_to_column("De") %>%
+  pivot_longer(-De, names_to = "Vers", values_to = "Prob") %>%
+  filter(Prob > 0) %>%
+  ggplot(aes(x = Vers, y = De, fill = Prob)) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(aes(label = paste0(round(Prob * 100, 1), "%")),
+            color = "white", fontface = "bold", size = 5) +
+  scale_fill_gradient(low = "#42A5F5", high = "#0D47A1") +
+  labs(title = "Matrice de transition — Chaîne de Markov MACRO",
+       x = "Activité suivante", y = "Activité courante") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid = element_blank())
+```
+```{r}
+nb_passages <- sequences %>%
+  unnest(sequence) %>%
+  rename(ACTIVITY_MACRO = sequence) %>%
+  count(PRIO, ACTIVITY_MACRO, name = "nb_passages")
+
+nb_ops <- ops %>%
+  filter(!is.na(ACTOR_TYPE)) %>%
+  group_by(PRIO, ACTIVITY_MACRO, ACTOR_TYPE, ID) %>%
+  summarise(intervient = 1, .groups = "drop") %>%
+  group_by(PRIO, ACTIVITY_MACRO, ACTOR_TYPE) %>%
+  summarise(nb_ops = n(), .groups = "drop")
+
+proba_res <- nb_ops %>%
+  left_join(nb_passages, by = c("PRIO", "ACTIVITY_MACRO")) %>%
+  mutate(prob = round(nb_ops / nb_passages, 3))
+
+print(proba_res)
+
+ggplot(proba_res, aes(x = ACTOR_TYPE, y = prob, fill = PRIO)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.85) +
+  geom_text(aes(label = round(prob, 2)),
+            position = position_dodge(0.9), vjust = -0.4, size = 3) +
+  facet_wrap(~ ACTIVITY_MACRO, scales = "free_x") +
+  scale_fill_manual(values = c("Prioritaire" = "#E53935", "Standard" = "#1565C0")) +
+  labs(title = "Probabilité de sollicitation des ressources",
+       x = "Type de ressource", y = "Probabilité", fill = "Type patient") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+```{r}
+
+ops_valid <- ops %>%
+  filter(!is.na(ACTOR_TYPE), !is.na(EPT_min), EPT_min > 0)
+
+combos <- ops_valid %>%
+  group_by(ACTIVITY_MACRO, ACTOR_TYPE, PRIO) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  filter(n >= 5)
+
+resultats_gamma <- data.frame()
+
+for (i in seq_len(nrow(combos))) {
+  m <- combos$ACTIVITY_MACRO[i]
+  a <- combos$ACTOR_TYPE[i]
+  p <- combos$PRIO[i]
+
+  x <- ops_valid$EPT_min[
+    ops_valid$ACTIVITY_MACRO == m &
+    ops_valid$ACTOR_TYPE == a &
+    ops_valid$PRIO == p
+  ]
+
+  fit <- tryCatch(fitdistr(x, "gamma"), error = function(e) NULL)
+
+  if (!is.null(fit)) {
+    sh <- fit$estimate["shape"]
+    ra <- fit$estimate["rate"]
+    resultats_gamma <- bind_rows(resultats_gamma, data.frame(
+      PRIO = p, ACTIVITY_MACRO = m, ACTOR_TYPE = a,
+      n = length(x),
+      shape = round(sh, 3),
+      rate  = round(ra, 3),
+      mean_EPT_min = round(sh / ra, 2),
+      cv = round(1 / sqrt(sh), 3)
+    ))
+  }
+}
+
+print(resultats_gamma)
+
+```
+```{r}
+
+set.seed(42)
+N_sim <- 1000
+
+sim_parcours <- function() {
+  etat <- "Accueil"
+  parcours <- etat
+  while (etat != "Sortie" && length(parcours) < 8) {
+    probs <- trans_prob[etat, ]
+    if (sum(probs) == 0) break
+    etat <- sample(etats, 1, prob = probs)
+    parcours <- c(parcours, etat)
+  }
+  paste(parcours, collapse = " -> ")
+}
+
+sim_seqs <- replicate(N_sim, sim_parcours())
+sim_table <- as.data.frame(table(sim_seqs)) %>%
+  rename(seq_str = sim_seqs, n_sim = Freq) %>%
+  mutate(pct_sim = round(n_sim / N_sim * 100, 1))
+
+obs_table <- sequences %>%
+  mutate(seq_str = sapply(sequence, paste, collapse = " -> ")) %>%
+  count(seq_str) %>%
+  mutate(pct_obs = round(n / sum(n) * 100, 1))
+
+# Garder uniquement les séquences observées dans les données réelles
+comparison <- obs_table %>%
+  left_join(sim_table, by = "seq_str") %>%
+  replace_na(list(n_sim = 0, pct_sim = 0)) %>%
+  arrange(desc(pct_obs)) %>%
+  # Tronquer les labels longs
+  mutate(seq_label = ifelse(nchar(seq_str) > 50,
+                            paste0(substr(seq_str, 1, 47), "..."),
+                            seq_str))
+
+print(comparison %>% dplyr::select(seq_str, pct_obs, pct_sim))
+
+comparison %>%
+  pivot_longer(cols = c(pct_obs, pct_sim), names_to = "Source", values_to = "Pct") %>%
+  mutate(Source = ifelse(Source == "pct_obs", "Observé", "Simulé (Markov)")) %>%
+  ggplot(aes(x = reorder(seq_label, Pct), y = Pct, fill = Source)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.85) +
+  geom_text(aes(label = paste0(Pct, "%")),
+            position = position_dodge(0.9), hjust = -0.1, size = 3) +
+  coord_flip() +
+  scale_fill_manual(values = c("Observé" = "#1565C0", "Simulé (Markov)" = "#E53935")) +
+  labs(title = "Validation : observé vs modèle de Markov (N=1000)",
+       x = "Séquence", y = "Fréquence (%)") +
+  theme_minimal() +
+  expand_limits(y = max(comparison$pct_obs, comparison$pct_sim, na.rm = TRUE) * 1.4)
+```
+
+```{r}
+# Modèle détaillé : on garde CURRENT_LOCATION sans agréger en ACTIVITY_MACRO
+ops_detail <- ops %>%
+  filter(!is.na(ACTOR_TYPE), !is.na(EPT_min), EPT_min > 0)
+
+combos_detail <- ops_detail %>%
+  group_by(CURRENT_LOCATION, ACTOR_TYPE, PRIO) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  filter(n >= 5)
+
+resultats_detail <- data.frame()
+
+for (i in seq_len(nrow(combos_detail))) {
+  loc <- combos_detail$CURRENT_LOCATION[i]
+  a   <- combos_detail$ACTOR_TYPE[i]
+  p   <- combos_detail$PRIO[i]
+
+  x <- ops_detail$EPT_min[
+    ops_detail$CURRENT_LOCATION == loc &
+    ops_detail$ACTOR_TYPE == a &
+    ops_detail$PRIO == p
+  ]
+
+  fit <- tryCatch(fitdistr(x, "gamma"), error = function(e) NULL)
+
+  if (!is.null(fit)) {
+    sh <- fit$estimate["shape"]
+    ra <- fit$estimate["rate"]
+    resultats_detail <- bind_rows(resultats_detail, data.frame(
+      PRIO = p, CURRENT_LOCATION = loc, ACTOR_TYPE = a,
+      n = length(x),
+      shape = round(sh, 3),
+      rate  = round(ra, 3),
+      mean_EPT_min = round(sh / ra, 2),
+      cv = round(1 / sqrt(sh), 3)
+    ))
+  }
+}
+
+print(resultats_detail)
+# Comparaison modèle simplifié vs modèle détaillé
+# On ajoute la colonne ACTIVITY_MACRO dans le détaillé pour pouvoir comparer
+resultats_detail <- resultats_detail %>%
+  mutate(ACTIVITY_MACRO = case_when(
+    str_detect(CURRENT_LOCATION, "Uro_Box")            ~ "Consultation",
+    str_detect(CURRENT_LOCATION, "Uro_Bureau_Annonce") ~ "Consultation",
+    str_detect(CURRENT_LOCATION, "Uro_Bureau_IDE")     ~ "Consultation",
+    str_detect(CURRENT_LOCATION, "Uro_Examen")         ~ "Examen",
+    str_detect(CURRENT_LOCATION, "Uro_Debimetrie")     ~ "Examen",
+    str_detect(CURRENT_LOCATION, "Accueil")            ~ "Accueil",
+    str_detect(CURRENT_LOCATION, "Sortie")             ~ "Sortie",
+    TRUE ~ NA_character_
+  ))
+
+# Comparaison des moyennes EPT : simplifié vs détaillé
+comp_modeles <- resultats_gamma %>%
+  dplyr::select(PRIO, ACTIVITY_MACRO, ACTOR_TYPE, 
+                mean_simple = mean_EPT_min, cv_simple = cv) %>%
+  left_join(
+    resultats_detail %>%
+      group_by(PRIO, ACTIVITY_MACRO, ACTOR_TYPE) %>%
+      summarise(
+        mean_detail = round(weighted.mean(mean_EPT_min, n), 2),
+        cv_detail   = round(mean(cv), 3),
+        .groups = "drop"
+      ),
+    by = c("PRIO", "ACTIVITY_MACRO", "ACTOR_TYPE")
+  ) %>%
+  mutate(diff_mean_pct = round((mean_detail - mean_simple) / mean_simple * 100, 1))
+
+cat("=== Comparaison modèle simplifié vs modèle détaillé ===\n")
+print(comp_modeles)
+
+# Visualisation
+comp_modeles %>%
+  pivot_longer(cols = c(mean_simple, mean_detail),
+               names_to = "Modele", values_to = "mean_EPT") %>%
+  mutate(
+    Modele = ifelse(Modele == "mean_simple", "Simplifié", "Détaillé"),
+    label  = paste0(ACTOR_TYPE, "\n(", PRIO, ")")
+  ) %>%
+  ggplot(aes(x = label, y = mean_EPT, fill = Modele)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.85) +
+  geom_text(aes(label = round(mean_EPT, 1)),
+            position = position_dodge(0.9), vjust = -0.4, size = 2.8) +
+  facet_wrap(~ ACTIVITY_MACRO, scales = "free") +
+  scale_fill_manual(values = c("Simplifié" = "#1565C0", "Détaillé" = "#E53935")) +
+  labs(title = "Comparaison EPT moyen : modèle simplifié vs modèle détaillé",
+       x = "Ressource (type patient)", y = "EPT moyen (min)", fill = "Modèle") +
+  theme_minimal(base_size = 9) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+### Question 2) Simulation du service d'accueil sous Anylogic (/2.5)
+
+A l'aide d'Anylogic, construisez le modèle de simulation correspondant à ce que vous avez fait au devoir 3 avec un modèle à 1 serveur pour le bureau prioritaire et un modèle à 3 serveurs pour les autres.
+
+![*schema pour comprendre*]()
+
+Vous testerez différents combinaisons de scénarios :
+
+- Arrivées réelles puis arrivées de poisson puis arrivées de poisson non homogènes
+
+- Temps services exponentiels puis gamma
+
+Pour les scénarios avec arrivées de poisson (homogènes et non homogènes), regarder l'évolution du niveau d'occupation et d'attente en fonction du taux lambda d'arrivé (différent de celui mesuré) et vérifiez bien que la saturation du service arrivé quand le taux d'arrivé atteint le taux de service maximal (quand $\rho \geq 1$).
+
+Finalement, à partir des arrivées réelles, testez le comportement du modèle pour différents nombre de serveurs avec un planning "dynamique" sur les tranches [8h;14h] et [14h;20h] avec 1 à 4 agents d'accueil disponibles par tranche (les patients prioritaires / non prioritaires peuvent être redirigés vers un autre bureau que celui où il doit aller initialement).
+
+Je créé d'abord un agent pour le patient : 
+Avec pour paramètres :
+type qui prendra la valeur {Prio, Autres} -> sert a définir si le patient est prioritaire ou non
+arrivalTime -> sa date:heure d'arrivée
+serviceStartTime -> Son arrivée dans le service
+departureTime -> son heure de depart du service
+
+### Question 3) Simulation du service d'urologie (/5)
+
+Avec la même méthodologie, et en considérant les circuits patients de la question 1, modélisez l'ensemble du service d'urologie sous Anylogic afin de répondre aux questions suivantes :
+
+    - En considérant un processus de Poisson non homogène avec les taux d'arrivées observées dans les données et le modèle de circuit patient de la question 1, quel est la configuration du planning sur les 2 tranches [8h;14h] et [14h;20h] qui **minimise le nombre d'agents moyen** sur la journée tout en évitant la saturation (tous les patients doivent avoir fini leur prise en charge avant 20h) ? 
+    
+```{r}
+library(tidyverse)
+library(lubridate)
+
+# Charger les données
+load("local_data/trace_example_final.RData")
+
+# Extraire les heures d'arrivée des patients
+arrivals <- trace_example_final %>%
+  dplyr::filter(TYPE == "PATIENT") %>%
+  mutate(
+    arrival_hour = hour(as.POSIXct(DATETIME_BEGIN)),
+    is_priority = ifelse(CURRENT_LOCATION %in% c("Accueil_Prio_1", "Accueil_Prio_2"), TRUE, FALSE)
+  ) %>%
+  group_by(arrival_hour, is_priority) %>%
+  summarise(n_arrivals = n(), .groups = "drop")
+
+# Calculer les taux d'arrivée par heure (lambda)
+lambda_by_hour <- arrivals %>%
+  mutate(lambda = n_arrivals / 3600)  # Taux par seconde (si nécessaire)
+
+```
+
+### Discussion supplémentaire (points complémentaires sur chaque question)
+
+Profitez en pour comparer votre modèle à la réalité.
+
+### Soutenance (/10)
+
+Préparez une **présentation orale de votre démarche**, de vos résulats et analyses de 15 min pour le **14/05**.
+
+
+
+```{r}
+# Charger les bibliothèques nécessaires
+library(tidyverse)    # Pour la manipulation de données
+library(lubridate)    # Pour la gestion des dates
+library(MASS)         # Pour l'ajustement des distributions Gamma
+library(gridExtra)    # Pour les graphiques multi-panneaux
+library(ggplot2)      # Pour les visualisations
+
+load("local_data/trace_example_final.RData")
+df <- trace_example_final
+
+# Filtrer uniquement les patients (TYPE == "PATIENT")
+patients <- df %>% filter(TYPE == "PATIENT")
+
+# Identifier les patients prioritaires (exemple : ceux passés par "Accueil_Prio_1")
+prio_ids <- unique(patients$ID[patients$CURRENT_LOCATION == "Accueil_Prio_1"])
+patients <- patients %>%
+  mutate(PRIO = ifelse(ID %in% prio_ids, "Prioritaire", "Standard"))
+
+patients <- patients %>%
+  mutate(
+    ACTIVITY_MACRO = case_when(
+      str_detect(CURRENT_LOCATION, "Uro_Box|Uro_Bureau_Annonce|Uro_Bureau_IDE") ~ "Consultation",
+      str_detect(CURRENT_LOCATION, "Uro_Examen|Uro_Debimetrie")         ~ "Examen",
+      str_detect(CURRENT_LOCATION, "Accueil")                            ~ "Accueil",
+      str_detect(CURRENT_LOCATION, "Sortie")                             ~ "Sortie",
+      TRUE ~ NA_character_
+    )
+  )
+sequences <- patients %>%
+  filter(!is.na(ACTIVITY_MACRO)) %>%
+  arrange(ID, DATETIME_BEGIN) %>%
+  group_by(ID, PRIO) %>%
+  mutate(prev_activity = lag(ACTIVITY_MACRO)) %>%
+  filter(is.na(prev_activity) | ACTIVITY_MACRO != prev_activity) %>%
+  summarise(sequence = list(ACTIVITY_MACRO), .groups = "drop")
+
+# Convertir les séquences en chaînes de caractères pour analyse
+seq_freq <- sequences %>%
+  mutate(seq_str = sapply(sequence, paste, collapse = " -> ")) %>%
+  count(seq_str, sort = TRUE) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+# Afficher les séquences les plus fréquentes pour les patients : 
+print(seq_freq)
+
+
+```
+```{r}
+etats <- c("Accueil", "Consultation", "Examen", "Sortie")
+
+# Initialiser la matrice de transition
+trans_count <- matrix(0, nrow = length(etats), ncol = length(etats),
+                      dimnames = list(from = etats, to = etats))
+
+# Remplir la matrice avec les transitions observées
+for (seq in sequences$sequence) {
+  if (length(seq) >= 2) {
+    for (i in 1:(length(seq) - 1)) {
+      from_state <- seq[i]
+      to_state <- seq[i + 1]
+      if (from_state %in% etats && to_state %in% etats) {
+        trans_count[from_state, to_state] <- trans_count[from_state, to_state] + 1
+      }
+    }
+  }
+}
+
+# Calculer les probabilités de transition
+trans_prob <- trans_count / rowSums(trans_count)
+trans_prob[is.nan(trans_prob)] <- 0  # Gérer les divisions par zéro
+
+# Afficher la matrice
+cat("=== Matrice de transition (probabilités) ===\n")
+print(round(trans_prob, 3))
+
+# Visualisation de la matrice
+as.data.frame(trans_prob) %>%
+  rownames_to_column("De") %>%
+  pivot_longer(-De, names_to = "Vers", values_to = "Prob") %>%
+  filter(Prob > 0) %>%
+  ggplot(aes(x = Vers, y = De, fill = Prob)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(round(Prob * 100, 1), "%")), color = "white") +
+  scale_fill_gradient(low = "#42A5F5", high = "#0D47A1") +
+  labs(title = "Matrice de transition - Chaîne de Markov MACRO",
+       x = "Activité suivante", y = "Activité courante") +
+  theme_minimal()
+
+```
+```{r}
+#On veut maintenant indentifier les acteurs
+patients <- patients %>%
+  mutate(
+    ACTOR_TYPE = case_when(
+      str_detect(WITH_1, "ACCUEIL")         ~ "Agent_Accueil",
+      str_detect(WITH_1, "SORTIE")          ~ "Agent_Sortie",
+      str_detect(WITH_1, "URO.IDE_Annonce") ~ "IDE_Annonce",
+      str_detect(WITH_1, "URO.IDE")         ~ "IDE",
+      str_detect(WITH_1, "URO.AS")          ~ "AS",
+      str_detect(WITH_1, "URO.MED")         ~ "MED",
+      TRUE ~ NA_character_
+    )
+  )
+# Filtrer les opérations avec intervention humaine
+ops <- patients %>%
+  filter(!is.na(CURRENT_OPERATION_NUMBER)) %>%
+  mutate(
+    DATETIME_BEGIN = as.POSIXct(DATETIME_BEGIN),
+    DATETIME_END   = as.POSIXct(DATETIME_END)
+  ) %>%
+  arrange(WITH_1, DATETIME_BEGIN) %>%
+  group_by(WITH_1) %>%
+  mutate(
+    DATETIME_END_prev = lag(DATETIME_END),
+    tdq = if_else(is.na(DATETIME_END_prev),
+                  DATETIME_BEGIN,
+                  pmax(DATETIME_BEGIN, DATETIME_END_prev)),
+    EPT_secs = as.numeric(difftime(DATETIME_END, tdq, units = "secs")),
+    EPT_min  = EPT_secs / 60
+  ) %>%
+  ungroup()
+
+# Exemple pour le patient ID 10
+ops %>%
+  filter(ID == 10) %>%
+  select(ACTIVITY_MACRO, WITH_1, ACTOR_TYPE, DATETIME_BEGIN, DATETIME_END, EPT_min)
+
+# Nombre de fois où un acteur intervient par activité
+nb_ops <- ops %>%
+  filter(!is.na(ACTOR_TYPE)) %>%
+  group_by(PRIO, ACTIVITY_MACRO, ACTOR_TYPE) %>%
+  summarise(nb_ops = n(), .groups = "drop")
+
+# Nombre total de passages par activité
+nb_passages <- sequences %>%
+  unnest(sequence) %>%
+  rename(ACTIVITY_MACRO = sequence) %>%
+  count(PRIO, ACTIVITY_MACRO, name = "nb_passages")
+
+# Calculer les probabilités
+proba_res <- nb_ops %>%
+  left_join(nb_passages, by = c("PRIO", "ACTIVITY_MACRO")) %>%
+  mutate(prob = round(nb_ops / nb_passages, 3))
+
+# Visualisation
+ggplot(proba_res, aes(x = ACTOR_TYPE, y = prob, fill = PRIO)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = round(prob, 2)), position = position_dodge(0.9), vjust = -0.5) +
+  facet_wrap(~ ACTIVITY_MACRO, scales = "free_x") +
+  scale_fill_manual(values = c("Prioritaire" = "#F05432", "Standard" = "#1565C0")) +
+  labs(title = "Probabilité d'intervention par acteur",
+       x = "Type d'acteur", y = "Probabilité") +
+  theme_minimal()
+
+```
+```{r}
+# Vérifier les données brutes pour les valeurs aberrantes
+ops_valid %>%
+  filter(!is.na(EPT_min), EPT_min > 0) %>%
+  group_by(ACTIVITY_MACRO, ACTOR_TYPE, PRIO) %>%
+  summarise(
+    n = n(),
+    min_EPT = min(EPT_min),
+    max_EPT = max(EPT_min),
+    mean_EPT = mean(EPT_min),
+    sd_EPT = sd(EPT_min),
+    cv = sd_EPT / mean_EPT
+  )
+
+#On veut ajuster les temps de service avce une loi gamma
+# Filtrer les données valides (EPT > 0)
+ops_valid <- ops %>%
+  filter(!is.na(ACTOR_TYPE), !is.na(EPT_min), EPT_min > 0)
+
+# Combinaisons (activité, acteur, priorité) avec au moins 5 observations
+combos <- ops_valid %>%
+  group_by(ACTIVITY_MACRO, ACTOR_TYPE, PRIO) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  filter(n >= 5)
+
+# Ajustement Gamma pour chaque combinaison
+resultats_gamma <- data.frame()
+
+for (i in 1:nrow(combos)) {
+  m <- combos$ACTIVITY_MACRO[i]
+  a <- combos$ACTOR_TYPE[i]
+  p <- combos$PRIO[i]
+
+  x <- ops_valid$EPT_min[
+    ops_valid$ACTIVITY_MACRO == m &
+    ops_valid$ACTOR_TYPE == a &
+    ops_valid$PRIO == p
+  ]
+
+  # Ajustement Gamma
+  fit <- fitdistr(x, "gamma")
+  sh <- fit$estimate["shape"]
+  sc <- fit$estimate["scale"]
+
+  resultats_gamma <- bind_rows(resultats_gamma, data.frame(
+    PRIO = p,
+    ACTIVITY_MACRO = m,
+    ACTOR_TYPE = a,
+    n = length(x),
+    shape = round(sh, 3),
+    scale = round(sc, 3),
+    mean_EPT_min = round(sh * sc, 2),  # Moyenne Gamma = shape * scale
+    cv = round(1 / sqrt(sh), 3)        # Coefficient de variation
+  ))
+}
+
+# Afficher les résultats
+print(resultats_gamma)
+
+```
+
+```{r}
+#Comparaison observé vs simulé (Markov)
+# Simuler des parcours avec la matrice de transition
+set.seed(42)
+N_sim <- 1000
+
+sim_parcours <- function() {
+  etat <- "Accueil"
+  parcours <- etat
+  while (etat != "Sortie" && length(parcours) < 8) {
+    probs <- trans_prob[etat, ]
+    if (sum(probs) == 0) break
+    etat <- sample(etats, 1, prob = probs)
+    parcours <- c(parcours, etat)
+  }
+  paste(parcours, collapse = " -> ")
+}
+
+# Générer des séquences simulées
+sim_seqs <- replicate(N_sim, sim_parcours())
+sim_table <- as.data.frame(table(sim_seqs)) %>%
+  rename(seq_str = sim_seqs, n_sim = Freq) %>%
+  mutate(pct_sim = round(n_sim / N_sim * 100, 1))
+
+# Comparaison avec les données observées
+comparison <- seq_freq %>%
+  left_join(sim_table, by = "seq_str") %>%
+  mutate(pct_obs = round(n / sum(n) * 100, 1)) %>%
+  replace_na(list(n_sim = 0, pct_sim = 0))
+
+# Visualisation
+comparison %>%
+  pivot_longer(cols = c(pct_obs, pct_sim), names_to = "Source", values_to = "Pct") %>%
+  mutate(Source = ifelse(Source == "pct_obs", "Observé", "Simulé (Markov)")) %>%
+  ggplot(aes(x = reorder(seq_str, Pct), y = Pct, fill = Source)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = paste0(Pct, "%")), position = position_dodge(0.9), vjust = -0.5) +
+  coord_flip() +
+  scale_fill_manual(values = c("Observé" = "#1565C0", "Simulé (Markov)" = "#E53935")) +
+  labs(title = "Validation : observé vs modèle de Markov (N=1000)",
+       x = "Séquence", y = "Fréquence (%)") +
+  theme_minimal()
+
+```
+```{r}
+
+# 1. Préparation des données (version corrigée)
+comp_modeles <- resultats_gamma %>%
+  select(PRIO, ACTIVITY_MACRO, ACTOR_TYPE, mean_EPT_min, cv) %>%
+  full_join(
+    resultats_detail %>%
+      group_by(PRIO, ACTIVITY_MACRO, ACTOR_TYPE) %>%
+      summarise(
+        mean_detail = round(weighted.mean(mean_EPT_min, n), 2),
+        cv_detail = round(mean(cv), 3),
+        .groups = "drop"
+      ),
+    by = c("PRIO", "ACTIVITY_MACRO", "ACTOR_TYPE")
+  ) %>%
+  mutate(
+    mean_EPT_min = ifelse(is.na(mean_EPT_min), mean_detail, mean_EPT_min),
+    mean_detail = ifelse(is.na(mean_detail), mean_EPT_min, mean_detail),
+    diff_mean_pct = round((mean_detail - mean_EPT_min) / mean_EPT_min * 100, 1)
+  ) %>%
+  filter(!is.na(mean_EPT_min) & !is.na(mean_detail))
+
+# 2. Identification des activités problématiques (si nécessaire)
+problem_activities <- comp_modeles %>%
+  group_by(ACTIVITY_MACRO) %>%
+  summarise(n_valid = n()) %>%
+  filter(n_valid == 0)
+
+if(nrow(problem_activities) > 0) {
+  comp_modeles <- comp_modeles %>%
+    filter(!ACTIVITY_MACRO %in% problem_activities$ACTIVITY_MACRO)
+}
+
+# 3. Visualisation finale (méthode simple et robuste)
+library(ggplot2)
+
+ggplot(
+  comp_modeles,
+  aes(x = reorder(paste0(ACTOR_TYPE, "\n(", PRIO, ")"), mean_EPT_min),
+      y = mean_EPT_min,
+      fill = "Modèle simplifié")
+) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_bar(
+    aes(y = mean_detail, fill = "Modèle détaillé"),
+    stat = "identity",
+    alpha = 0.8
+  ) +
+  geom_text(
+    aes(label = round(mean_EPT_min, 1)),
+    position = position_nudge(x = -0.2),
+    vjust = -0.5,
+    size = 3
+  ) +
+  geom_text(
+    aes(y = mean_detail, label = round(mean_detail, 1)),
+    position = position_nudge(x = 0.2),
+    vjust = -0.5,
+    size = 3
+  ) +
+  facet_wrap(~ ACTIVITY_MACRO, scales = "free_x") +
+  scale_fill_manual(
+    values = c("Modèle simplifié" = "#1565C0", "Modèle détaillé" = "#E53935"),
+    name = "Modèle"
+  ) +
+  labs(
+    title = "Comparaison EPT moyen : modèle simplifié vs détaillé",
+    x = "Ressource (type patient)",
+    y = "EPT moyen (min)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
