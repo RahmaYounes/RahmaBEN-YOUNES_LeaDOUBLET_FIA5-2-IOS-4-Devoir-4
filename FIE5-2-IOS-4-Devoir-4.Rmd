@@ -1,10 +1,10 @@
 ---
 title: "FIE4-2-IMTNS-2-Devoir-4"
 author: "Adrien Wartelle"
-Groupe: " Rahma Ben Younes - Léa Doublet"
 date: "2026-01-11"
 output: html_notebook # html_document
 ---
+#groupe: "Rahma Ben Younes - Léa Doublet"
 
 # Etude de cas sur l’analyse et la mesure de performance des Flux de Patients
 
@@ -1180,3 +1180,98 @@ ggplot(
 
 
 ```
+# Anylogic:
+
+## 1.Modèle Anylogic:
+
+Le service d’urologie a été modélisé sous AnyLogic à partir des circuits patients observés dans les données de la question 1. Les patients arrivent d’abord au service d’accueil avant d’être orientés vers une consultation ou un examen selon leur parcours. Après la consultation, les patients rejoignent directement le service de sortie. Après un examen, une orientation supplémentaire est réalisée avant la sortie du système. Ce modèle permet de représenter les principaux flux patients ainsi que l’utilisation des ressources du service au cours de la journée.
+
+Le but est de :
+
+- simuler le service d’urologie avec des arrivées de Poisson non homogènes
+- faire varier le nombre d’agents selon l’heure
+- trouver la configuration qui :
+      * utilise le moins d’agents possible
+      * sans saturation
+      * avec tous les patients terminés avant 20h.
+
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q3_ModèleAnylogic.png")
+```
+
+## 2. Tests des configurations:
+
+Plusieurs configurations de planning ont été testées afin d’identifier le nombre minimal d’agents nécessaire pour assurer le bon fonctionnement du service. Les simulations permettent de comparer l’impact des ressources sur les temps d’attente, les temps de prise en charge et la saturation du système.
+
+
+```{r}
+tests <- data.frame(
+  Test = c("Test 1", "Test 2", "Test 3", "Test 4"),
+  
+  Accueil_AM = c(1, 2, 2, 2),
+  Accueil_PM = c(1, 1, 1, 1),
+  
+  Consultation_AM = c(1, 2, 3, 5),
+  Consultation_PM = c(1, 1, 2, 4),
+  
+  Examen_AM = c(1, 1, 2, 2),
+  Examen_PM = c(1, 1, 1, 1)
+)
+
+knitr::kable(tests,
+             caption = "Configurations de planning testées pour le service d’urologie")
+```
+## 3. Résultats de simulation:
+
+### a. Résultats test 1:
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q3_test1.png")
+```
+
+=> La configuration avec un seul agent par service entraîne une saturation du système. Le dernier départ dépasse largement 20h, ce qui montre que les ressources sont insuffisantes pour absorber le flux de patients.
+
+### b. Résultats test 2:
+
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q3_test2.png")
+
+```
+=> L’augmentation du nombre d’agents permet de réduire le temps moyen passé dans le système ainsi que le niveau de saturation. Cependant, le dernier départ reste supérieur à 20h, ce qui indique que la configuration reste insuffisante pour absorber correctement le flux de patients.
+
+
+### c. Résultats test 2:
+
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q3_test3.png")
+
+```
+
+=> L’augmentation du nombre d’agents en consultation permet de réduire fortement le temps moyen passé dans le système. Cependant, malgré cette amélioration, certains patients terminent encore leur prise en charge après 20h. Le système reste donc légèrement saturé.
+
+### d. Résultats test 4:
+
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q3_test4.png")
+
+```
+
+=> L’augmentation du nombre d’agents en consultation permet de supprimer la saturation du système. L’ensemble des patients est correctement pris en charge et sort du système à la fin de la simulation.
+
+# 4. Conclusion:
+
+Plusieurs configurations de planning ont été testées sur les deux tranches horaires [8h ; 14h] et [14h ; 20h] en faisant varier le nombre d’agents affectés aux différents services.
+
+Les simulations ont montré qu’une configuration avec un nombre insuffisant d’agents entraîne une saturation du système, une augmentation importante du temps moyen passé dans le système ainsi qu’un retard de prise en charge des patients. À l’inverse, l’augmentation progressive des ressources, principalement au niveau des consultations, permet d’améliorer les performances du système et de réduire les files d’attente.
+
+La configuration retenue correspond à :
+
+- 2 agents à l’accueil le matin et 1 l’après-midi
+- 5 agents en consultation le matin et 4 l’après-midi
+- 2 agents en examen le matin et 1 l’après-midi.
+
+Cette configuration permet de traiter l’ensemble des patients sans saturation du système tout en limitant le nombre moyen d’agents mobilisés sur la journée.
