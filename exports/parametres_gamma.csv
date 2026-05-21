@@ -1,0 +1,13 @@
+ACTIVITY_MACRO,ACTOR,IS_PRIORITY,shape,rate,scale
+Accueil,ACCUEIL.Agent_Acc_1(1),FALSE,NA,NA,NA
+Accueil,ACCUEIL.Agent_Acc_1(2),FALSE,NA,NA,NA
+Consultation,URO.AS(1),FALSE,NA,NA,NA
+Consultation,URO.AS(2),FALSE,NA,NA,NA
+Consultation,URO.MED(1),FALSE,NA,NA,NA
+Consultation,URO.MED(3),FALSE,NA,NA,NA
+Consultation,URO.MED(5),FALSE,NA,NA,NA
+Consultation,URO.MED(6),FALSE,NA,NA,NA
+Examen,URO.AS(1),FALSE,NA,NA,NA
+Examen,URO.IDE(1),FALSE,NA,NA,NA
+Examen,URO.IDE(2),FALSE,NA,NA,NA
+Sortie,SORTIE_URO.Agent_Sortie(1),FALSE,NA,NA,NA

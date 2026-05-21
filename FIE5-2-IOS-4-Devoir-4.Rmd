@@ -1,6 +1,7 @@
 ---
 title: "FIE4-2-IMTNS-2-Devoir-4"
 author: "Adrien Wartelle"
+Groupe: " Rahma Ben Younes - Léa Doublet"
 date: "2026-01-11"
 output: html_notebook # html_document
 ---
@@ -646,6 +647,144 @@ arrivalTime -> sa date:heure d'arrivée
 serviceStartTime -> Son arrivée dans le service
 departureTime -> son heure de depart du service
 
+```{r}
+# Creation fichiers données acceuil
+
+library(dplyr)
+library(lubridate)
+library(writexl)
+
+# Données utilisées pour la simulation de l'accueil
+data_accueil <- patients
+
+# Heure de début de la journée simulée
+heure_debut <- as.POSIXct(
+  "2015-11-12 08:00:00",
+  tz = "Europe/Paris"
+)
+
+# Extraction des arrivées à l'accueil
+arrivees_accueil <- data_accueil %>%
+  
+  filter(ACTIVITY_MACRO == "Accueil") %>%
+  
+  group_by(ID, PRIO) %>%
+  
+  summarise(
+    heure_arrivee = min(
+      as.POSIXct(DATETIME_BEGIN, tz = "Europe/Paris")
+    ),
+    .groups = "drop"
+  ) %>%
+  
+  arrange(heure_arrivee) %>%
+  
+  mutate(
+    patient_id = row_number(),
+    
+    type_patient = PRIO,
+    
+    temps_depuis_8h = as.numeric(
+      difftime(
+        heure_arrivee,
+        heure_debut,
+        units = "mins"
+      )
+    )
+  ) %>%
+  
+  select(
+    patient_id,
+    ID,
+    type_patient,
+    heure_arrivee,
+    temps_depuis_8h
+  )
+
+# Export des arrivées pour AnyLogic
+write_xlsx(
+  arrivees_accueil,
+  "local_data/fluxAccueil.xlsx"
+)
+
+write.csv2(
+  arrivees_accueil,
+  "local_data/fluxAccueil.csv",
+  row.names = FALSE
+)
+
+# Paramètres Gamma du service accueil
+params_gamma_accueil <- resultats_gamma %>%
+  filter(ACTIVITY_MACRO == "Accueil")
+
+write.csv2(
+  params_gamma_accueil,
+  "local_data/Gamma_accueil.csv",
+  row.names = FALSE
+)
+
+# Vérification
+print(arrivees_accueil)
+print(params_gamma_accueil)
+```
+## 1- Arrivées réelles avec temps de service exponentiels:
+Ce premier scénario utilise les arrivées réelles extraites des données hospitalières. Les patients sont générés dans AnyLogic à partir des horaires observés dans la base de données. Les temps de service sont modélisés par une loi exponentielle afin de représenter des durées de traitement aléatoires simples.
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_param_reel.png")
+
+
+```
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_param_arriveesReels.png")
+```
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_Reel.png")
+```
+
+## 2. Arrivées de Poisson homogène avec temps exponentiels
+
+Dans ce scénario, les arrivées suivent un processus de Poisson homogène avec un taux λ constant. Plusieurs valeurs de λ ont été testées afin d’observer l’évolution du niveau d’occupation et les phénomènes de saturation.
+
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_param_arriveesPoissonsHomogene.png")
+```
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_poissonHomogene.png")
+```
+
+
+
+## 3. Arrivées de Poisson non homogène avec temps exponentiels
+
+Les arrivées sont ici modélisées par un processus de Poisson non homogène. Le taux d’arrivée varie selon les périodes de la journée afin de reproduire des variations d’activité plus réalistes.
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_param_poissonNonHomogene.png")
+```
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_PoissonNonHomogene.png")
+```
+
+
+
+## 4. Temps de service Gamma
+
+Les temps de service exponentiels ont ensuite été remplacés par des lois Gamma ajustées à partir des données réelles sous R afin d’obtenir une représentation plus réaliste des durées de traitement.
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_param_Gamma.png")
+```
+
+```{r}
+knitr::include_graphics("Anylogic_images/Q2_Gamma.png")
+```
+
+
 ### Question 3) Simulation du service d'urologie (/5)
 
 Avec la même méthodologie, et en considérant les circuits patients de la question 1, modélisez l'ensemble du service d'urologie sous Anylogic afin de répondre aux questions suivantes :
@@ -842,6 +981,9 @@ ggplot(proba_res, aes(x = ACTOR_TYPE, y = prob, fill = PRIO)) +
 
 ```
 ```{r}
+library(dplyr)
+library(MASS)
+
 # Vérifier les données brutes pour les valeurs aberrantes
 ops_valid %>%
   filter(!is.na(EPT_min), EPT_min > 0) %>%
@@ -855,21 +997,26 @@ ops_valid %>%
     cv = sd_EPT / mean_EPT
   )
 
-#On veut ajuster les temps de service avce une loi gamma
-# Filtrer les données valides (EPT > 0)
+# Filtrer les données valides
 ops_valid <- ops %>%
-  filter(!is.na(ACTOR_TYPE), !is.na(EPT_min), EPT_min > 0)
+  filter(
+    !is.na(ACTOR_TYPE),
+    !is.na(EPT_min),
+    EPT_min > 0
+  )
 
-# Combinaisons (activité, acteur, priorité) avec au moins 5 observations
+# Combinaisons avec au moins 5 observations
 combos <- ops_valid %>%
   group_by(ACTIVITY_MACRO, ACTOR_TYPE, PRIO) %>%
   summarise(n = n(), .groups = "drop") %>%
   filter(n >= 5)
 
-# Ajustement Gamma pour chaque combinaison
+# Tableau résultat
 resultats_gamma <- data.frame()
 
+# Ajustement Gamma
 for (i in 1:nrow(combos)) {
+
   m <- combos$ACTIVITY_MACRO[i]
   a <- combos$ACTOR_TYPE[i]
   p <- combos$PRIO[i]
@@ -880,25 +1027,37 @@ for (i in 1:nrow(combos)) {
     ops_valid$PRIO == p
   ]
 
-  # Ajustement Gamma
-  fit <- fitdistr(x, "gamma")
-  sh <- fit$estimate["shape"]
-  sc <- fit$estimate["scale"]
+  # Nettoyage sécurité
+  x <- x[!is.na(x) & x > 0]
 
-  resultats_gamma <- bind_rows(resultats_gamma, data.frame(
-    PRIO = p,
-    ACTIVITY_MACRO = m,
-    ACTOR_TYPE = a,
-    n = length(x),
-    shape = round(sh, 3),
-    scale = round(sc, 3),
-    mean_EPT_min = round(sh * sc, 2),  # Moyenne Gamma = shape * scale
-    cv = round(1 / sqrt(sh), 3)        # Coefficient de variation
-  ))
+  # Vérifier variance non nulle
+  if(length(x) >= 5 && sd(x) > 0) {
+
+    fit <- fitdistr(x, "gamma")
+
+    sh <- fit$estimate["shape"]
+    rt <- fit$estimate["rate"]
+
+    resultats_gamma <- bind_rows(
+      resultats_gamma,
+      data.frame(
+        PRIO = p,
+        ACTIVITY_MACRO = m,
+        ACTOR_TYPE = a,
+        n = length(x),
+        shape = round(sh, 3),
+        scale = round(1 / rt, 3),
+        mean_EPT_min = round(sh / rt, 2),
+        cv = round(1 / sqrt(sh), 3)
+      )
+    )
+
+  }
 }
 
 # Afficher les résultats
 print(resultats_gamma)
+
 
 ```
 
